@@ -1,74 +1,93 @@
 import requests
 from bs4 import BeautifulSoup
 import json
-import os
 import time
+from urllib.parse import urljoin, urlparse
 
-# ---------- Config ----------
-OUTPUT_FILE = os.path.join("..", "data", "data.json")
-SEED_URL = "https://en.wikipedia.org/wiki/Artificial_intelligence"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; MiniSearchBot/0.1)"}
-MAX_PAGES = 5  # safe demo number
-POLITE_DELAY = 1  # seconds
+# -----------------------
+# CONFIGURATION
+# -----------------------
+START_URL = "https://en.wikipedia.org/wiki/Artificial_intelligence"  # seed page
+MAX_PAGES = 50  # number of pages to crawl
+OUTPUT_FILE = "../data/data.json"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
 
-# ---------- Storage ----------
-visited = set()
+# -----------------------
+# HELPER FUNCTIONS
+# -----------------------
+def get_main_content(soup):
+    """
+    Extracts all paragraph text inside the main content div
+    """
+    content_div = soup.find("div", {"id": "mw-content-text"})
+    if not content_div:
+        return ""
+    paragraphs = content_div.find_all("p")
+    text = "\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
+    return text
+
+def is_valid_wiki_link(href):
+    """
+    Checks if the link is an internal Wikipedia link (skips special pages)
+    """
+    if href and href.startswith("/wiki/") and not any(prefix in href for prefix in [":", "#"]):
+        return True
+    return False
+
+# -----------------------
+# MAIN CRAWLER
+# -----------------------
+to_crawl = [START_URL]
+crawled = set()
 data = []
 
-# ---------- Crawl + Scrape function ----------
-def crawl_page(url):
-    if url in visited or len(data) >= MAX_PAGES:
-        return
-    visited.add(url)
-    print(f"Crawling: {url}")
+while to_crawl and len(crawled) < MAX_PAGES:
+    url = to_crawl.pop(0)
+    if url in crawled:
+        continue
 
     try:
-        resp = requests.get(url, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        print(f"Crawling: {url}")
+        response = requests.get(url, headers=HEADERS)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        # --- Title ---
+        # Get title
         title_tag = soup.find("title")
-        title = title_tag.get_text().replace(" - Wikipedia", "") if title_tag else "No title"
+        title = title_tag.get_text(strip=True) if title_tag else "No title"
 
-        # --- Main content ---
-        content_div = soup.find("div", {"id": "mw-content-text"})
-        content = ""
-        if content_div:
-            paragraphs = content_div.find_all("p")
-            content = " ".join(
-                p.get_text(strip=True)
-                for p in paragraphs
-                if p.get_text(strip=True)
-            )
+        # Get main content
+        content = get_main_content(soup)
 
-        # --- Save page if content exists ---
-        if content:
-            data.append({
-                "url": url,
-                "title": title,
-                "content": content[:5000]  # save first 5000 chars to keep JSON manageable
-            })
+        # Save result
+        data.append({
+            "url": url,
+            "title": title,
+            "content": content
+        })
 
-        # --- Follow internal links (safe, limited) ---
-        if len(data) < MAX_PAGES:
-            links = content_div.find_all("a", href=True) if content_div else []
-            for link in links:
-                href = link["href"]
-                if href.startswith("/wiki/") and not any(x in href for x in [":", "#"]):
-                    next_url = "https://en.wikipedia.org" + href
-                    if next_url not in visited and len(data) < MAX_PAGES:
-                        time.sleep(POLITE_DELAY)
-                        crawl_page(next_url)
+        crawled.add(url)
+
+        # Find all internal Wikipedia links and add to queue
+        for link in soup.find_all("a", href=True):
+            href = link['href']
+            if is_valid_wiki_link(href):
+                full_url = urljoin("https://en.wikipedia.org", href)
+                if full_url not in crawled and full_url not in to_crawl:
+                    to_crawl.append(full_url)
+
+        # Sleep 1 second to avoid overloading server
+        time.sleep(1)
 
     except Exception as e:
         print(f"Failed to crawl {url}: {e}")
+        continue
 
-# ---------- Main ----------
-if __name__ == "__main__":
-    crawl_page(SEED_URL)
+print(f"Finished crawling {len(crawled)} pages. Data saved to {OUTPUT_FILE}")
 
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
-    print(f"Finished crawling {len(data)} pages. Data saved to {OUTPUT_FILE}")
+# -----------------------
+# SAVE TO JSON
+# -----------------------
+with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=4, ensure_ascii=False)
