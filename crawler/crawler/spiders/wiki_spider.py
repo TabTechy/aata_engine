@@ -8,13 +8,16 @@ class WikiSpider(scrapy.Spider):
     start_urls = ["https://en.wikipedia.org/wiki/Artificial_intelligence"]
 
     custom_settings = {
-        "CLOSESPIDER_PAGECOUNT": 100,
-        "DOWNLOAD_DELAY": 0.5,
-        "ROBOTSTXT_OBEY": True
+        "CLOSESPIDER_PAGECOUNT": 1000,     # ✅ Target: 1000 pages
+        "DOWNLOAD_DELAY": 0.7,            # ✅ Safe delay
+        "CONCURRENT_REQUESTS": 8,         # ✅ Balanced speed
+        "DEPTH_LIMIT": 3,                 # ✅ Prevent overly deep crawling
+        "ROBOTSTXT_OBEY": True,
+        "LOG_LEVEL": "INFO"
     }
 
     def generate_id(self, url):
-        """Generate a stable 12-char hash ID based on URL."""
+        """Generate a stable 12-char hash ID based on the URL."""
         return hashlib.md5(url.encode()).hexdigest()[:12]
 
     def parse(self, response):
@@ -24,7 +27,7 @@ class WikiSpider(scrapy.Spider):
         for sup in soup.find_all("sup"):
             sup.decompose()
 
-        # ✅ Remove entire References section (and content below it)
+        # ✅ Remove entire References section (and everything after it)
         references_section = soup.find("span", {"id": "References"})
         if references_section:
             parent = references_section.find_parent("h2")
@@ -43,23 +46,25 @@ class WikiSpider(scrapy.Spider):
         # ✅ Extract cleaned main content
         content = ' '.join(p.get_text(strip=True) for p in soup.find_all('p'))
 
-        # ✅ Extract up to 10 internal Wikipedia links (AND continue crawling)
+        # ✅ Collect up to 15 unique valid wiki links for further crawling
         links = []
         for a in soup.find_all('a', href=True):
             href = a['href']
             if href.startswith("/wiki/") and not any(x in href for x in [":", "#"]):
                 full_url = response.urljoin(href)
-                links.append(full_url)
-                yield response.follow(full_url, callback=self.parse)
+                if full_url not in links:
+                    links.append(full_url)
+                    if len(links) <= 15:  # ✅ Limits outgoing requests
+                        yield response.follow(full_url, callback=self.parse)
 
-        # ✅ Yield in your final dataset format
+        # ✅ Yield in your chosen dataset format
         yield {
             "id": self.generate_id(response.url),
-            "content": content,  # ✅ clean text for indexing
+            "content": content,  # ✅ clean text for RAG/vector embedding later
             "metadata": {
                 "url": response.url,
                 "title": title,
                 "headings": headings,
-                "links": links[:10]
+                "links": links[:10]  # ✅ Store only 10 for reference
             }
         }
