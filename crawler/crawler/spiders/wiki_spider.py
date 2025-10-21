@@ -7,7 +7,6 @@ class WikiSpider(scrapy.Spider):
     name = "wiki"
     start_urls = ["https://en.wikipedia.org/wiki/Artificial_intelligence"]
 
-    # Allow up to 100 pages
     custom_settings = {
         "CLOSESPIDER_PAGECOUNT": 100,
         "DOWNLOAD_DELAY": 0.5,
@@ -15,7 +14,8 @@ class WikiSpider(scrapy.Spider):
     }
 
     def generate_id(self, url):
-        return hashlib.md5(url.encode()).hexdigest()[:12]  # short, readable ID
+        """Generate a stable 12-char hash ID based on URL."""
+        return hashlib.md5(url.encode()).hexdigest()[:12]
 
     def parse(self, response):
         soup = BeautifulSoup(response.text, "lxml")
@@ -24,7 +24,7 @@ class WikiSpider(scrapy.Spider):
         for sup in soup.find_all("sup"):
             sup.decompose()
 
-        # ✅ Remove entire references section
+        # ✅ Remove entire References section (and content below it)
         references_section = soup.find("span", {"id": "References"})
         if references_section:
             parent = references_section.find_parent("h2")
@@ -37,16 +37,13 @@ class WikiSpider(scrapy.Spider):
         title_tag = soup.find("h1", {"id": "firstHeading"})
         title = title_tag.get_text(strip=True) if title_tag else "Untitled"
 
-        # ✅ Extract headings
+        # ✅ Extract headings (H2, H3)
         headings = [h.get_text(strip=True) for h in soup.find_all(['h2', 'h3'])]
 
-        # ✅ Extract main content
+        # ✅ Extract cleaned main content
         content = ' '.join(p.get_text(strip=True) for p in soup.find_all('p'))
 
-        # ✅ Create combined_text for search indexing
-        combined_text = f"{title} {' '.join(headings)} {content}".strip()
-
-        # ✅ Extract top 10 internal Wikipedia links & follow them
+        # ✅ Extract up to 10 internal Wikipedia links (AND continue crawling)
         links = []
         for a in soup.find_all('a', href=True):
             href = a['href']
@@ -55,13 +52,14 @@ class WikiSpider(scrapy.Spider):
                 links.append(full_url)
                 yield response.follow(full_url, callback=self.parse)
 
-        # ✅ Yield in CLEAN format
+        # ✅ Yield in your final dataset format
         yield {
             "id": self.generate_id(response.url),
-            "url": response.url,
-            "title": title,
-            "headings": headings,
-            "content": content,
-            "combined_text": combined_text,
-            "links": links[:10]
+            "content": content,  # ✅ clean text for indexing
+            "metadata": {
+                "url": response.url,
+                "title": title,
+                "headings": headings,
+                "links": links[:10]
+            }
         }
